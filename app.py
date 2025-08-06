@@ -9,49 +9,76 @@ st.set_page_config(page_title="POC Oriente Farma", layout="wide")
 inject_custom_css()
 
 st.title("📦 Análise de Separação de Pedidos - Oriente Farma")
-st.markdown("Esta aplicação analisa a relação entre a quantidade de SKUs distintos por pedido e o tempo de separação da ordem de serviço.")
+st.markdown(
+    "Esta aplicação analisa a relação entre a quantidade "
+    "de SKUs distintos por pedido e o tempo de separação "
+    "da ordem de serviço, usando os registros de LinhaTempoWMS."
+)
 
-# Opção para dados de exemplo
+# Carrega dados
 usar_exemplo = st.checkbox("🔄 Usar dados de exemplo")
-
 if usar_exemplo:
-    exemplo_path = os.path.join("data", "levantantamentoDados.xlsx")
-    df = pd.read_excel(exemplo_path, sheet_name="DetalhadoWMS")
+    caminho = os.path.join("data", "levantantamentoDados.xlsx")
+    df = pd.read_excel(caminho, sheet_name="LinhaTempoWMS")
 else:
-    uploaded_file = st.file_uploader("📁 Faça upload do arquivo Excel (.xlsx) com os dados", type=["xlsx"])
-    if not uploaded_file:
+    f = st.file_uploader("📁 Faça upload do Excel", type=["xlsx"])
+    if not f:
         st.stop()
-    df = pd.read_excel(uploaded_file, sheet_name="DetalhadoWMS")
+    df = pd.read_excel(f, sheet_name="LinhaTempoWMS")
 
-# Conversão de datas
+# Converte timestamps
 df["DatInicioVolume"] = pd.to_datetime(df["DatInicioVolume"])
-df["DatFimVolume"] = pd.to_datetime(df["DatFimVolume"])
+df["DatFimVolume"]    = pd.to_datetime(df["DatFimVolume"])
 
-# SKUs distintos por pedido
-skus_por_pedido = df.groupby("CodPedido")["codigo_produto"].nunique().reset_index()
-skus_por_pedido.columns = ["CodPedido", "Qtd_SKUs"]
+# Calcula o tempo de cada volume em minutos
+df["tempo_min"] = (
+    df["DatFimVolume"] - df["DatInicioVolume"]
+).dt.total_seconds() / 60
 
-# Tempo médio por pedido
-df["tempo_separacao_min"] = (df["DatFimVolume"] - df["DatInicioVolume"]).dt.total_seconds() / 60
-tempo_por_pedido = df.groupby("CodPedido")["tempo_separacao_min"].mean().reset_index()
+# Agrega por pedido
+base = (
+    df.groupby("CodPedido")
+      .agg(
+          Qtd_SKUs=("QuantidadeSKU", "max"),
+          tempo_min=("tempo_min", "sum")
+      )
+      .reset_index()
+)
 
-# Merge final
-base = pd.merge(skus_por_pedido, tempo_por_pedido, on="CodPedido")
+# Formata para hh:mm:ss
+base["tempo_hms"] = (
+    pd.to_timedelta(base["tempo_min"], unit="m")
+      .astype(str)
+      .str.split(".", expand=True)[0]
+      .str.replace(r"^0 days ", "", regex=True)
+)
 
-# Scatter plot
+# Gráfico de dispersão com hover customizado
 fig = px.scatter(
     base,
     x="Qtd_SKUs",
-    y="tempo_separacao_min",
-    title="Quantidade de SKUs vs Tempo de Separação (minutos)",
+    y="tempo_min",
+    custom_data=["tempo_hms"],
+    title="Quantidade de SKUs vs Tempo de Separação",
     labels={
-        "Qtd_SKUs": "Quantidade de SKUs distintos",
-        "tempo_separacao_min": "Tempo de separação (min)"
+        "Qtd_SKUs":  "Quantidade de SKUs distintos",
+        "tempo_min": "Tempo total (min)"
     },
     template="plotly_dark"
 )
+fig.update_traces(
+    hovertemplate=(
+        "SKUs: %{x}<br>"
+        "Tempo: %{customdata[0]}"
+    )
+)
+
 st.plotly_chart(fig, use_container_width=True)
 
-# Dados em tabela
+# Tabela com tempo em hh:mm:ss
 with st.expander("🔍 Ver dados consolidados"):
-    st.dataframe(base, use_container_width=True)
+    st.dataframe(
+        base[["CodPedido", "Qtd_SKUs", "tempo_hms"]],
+        use_container_width=True
+
+    )
